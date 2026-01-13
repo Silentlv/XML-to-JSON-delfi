@@ -3,80 +3,122 @@ const fs = require('fs');
 // Nolasa XML failu
 const xmlData = fs.readFileSync('xml.xml', 'utf8');
 
-// Funkcija, lai izņemtu tekstu no CDATA
+// Sadala pa rindām
+const lines = xmlData.split('\n');
+
+// Izņem CDATA
 function extractCDATA(text) {
   if (!text) return '';
-  const cdataMatch = text.match(/<!\[CDATA\[(.*?)\]\]>/s);
-  return cdataMatch ? cdataMatch[1].trim() : text.trim();
+  return text
+    .replace('<![CDATA[', '')
+    .replace(']]>', '')
+    .trim();
 }
 
-// Funkcija, lai iegūtu tekstu starp XML tagiem
-function getTagContent(xml, tagName) {
-  const regex = new RegExp(`<${tagName}[^>]*>(.*?)<\/${tagName}>`, 's');
-  const match = xml.match(regex);
-  return match ? extractCDATA(match[1]) : '';
-}
-
-// Funkcija, lai iegūtu visus elementus pēc taga nosaukuma
-function getAllTags(xml, tagName) {
-  const regex = new RegExp(`<${tagName}[^>]*>(.*?)<\/${tagName}>`, 'gs');
-  const matches = [];
-  let match;
-  while ((match = regex.exec(xml)) !== null) {
-    matches.push(extractCDATA(match[1]));
-  }
-  return matches;
-}
-
-// Funkcija, lai iegūtu atribūtu vērtību
-function getAttributeValue(tag, attrName) {
-  const regex = new RegExp(`${attrName}="([^"]*)"`, 'i');
-  const match = tag.match(regex);
-  return match ? match[1] : '';
-}
-
-// Izvelk kanāla informāciju
-const channelMatch = xmlData.match(/<channel>(.*?)<\/channel>/s);
-const channelXml = channelMatch ? channelMatch[1] : '';
-
-const simplified = {
-  channel: {
-    title: getTagContent(channelXml, 'title'),
-    link: getTagContent(channelXml, 'link'),
-    description: getTagContent(channelXml, 'description'),
-    lastBuildDate: getTagContent(channelXml, 'lastBuildDate'),
-    language: getTagContent(channelXml, 'language')
-  },
+const result = {
+  channel: {},
   items: []
 };
 
-// Izvelk visus <item> elementus
-const itemRegex = /<item>(.*?)<\/item>/gs;
-let itemMatch;
+let currentItem = null;
+let insideChannel = false;
+let insideItem = false;
 
-while ((itemMatch = itemRegex.exec(channelXml)) !== null) {
-  const itemXml = itemMatch[1];
-  
-  // Iegūst enclosure URL
-  const enclosureMatch = itemXml.match(/<enclosure[^>]*\/>/);
-  const imageUrl = enclosureMatch ? getAttributeValue(enclosureMatch[0], 'url') : '';
-  
-  // Iegūst visas kategorijas
-  const categories = getAllTags(itemXml, 'category');
-  
-  simplified.items.push({
-    title: getTagContent(itemXml, 'title'),
-    link: getTagContent(itemXml, 'link'),
-    guid: getTagContent(itemXml, 'guid'),
-    pubDate: getTagContent(itemXml, 'pubDate'),
-    description: getTagContent(itemXml, 'description'),
-    content: getTagContent(itemXml, 'content:encoded'),
-    categories: categories,
-    image: imageUrl
-  });
+for (let i = 0; i < lines.length; i++) {
+  const line = lines[i].trim();
+
+  // ----- CHANNEL -----
+  if (line.startsWith('<channel>')) {
+    insideChannel = true;
+    continue;
+  }
+
+  if (line.startsWith('</channel>')) {
+    insideChannel = false;
+    continue;
+  }
+
+  if (insideChannel && !insideItem) {
+    if (line.startsWith('<title>')) {
+      result.channel.title = extractCDATA(line.replace(/<\/?title>/g, ''));
+    }
+    if (line.startsWith('<link>')) {
+      result.channel.link = extractCDATA(line.replace(/<\/?link>/g, ''));
+    }
+    if (line.startsWith('<description>')) {
+      result.channel.description = extractCDATA(line.replace(/<\/?description>/g, ''));
+    }
+    if (line.startsWith('<language>')) {
+      result.channel.language = extractCDATA(line.replace(/<\/?language>/g, ''));
+    }
+    if (line.startsWith('<lastBuildDate>')) {
+      result.channel.lastBuildDate = extractCDATA(line.replace(/<\/?lastBuildDate>/g, ''));
+    }
+  }
+
+  // ----- ITEM START -----
+  if (line.startsWith('<item>')) {
+    insideItem = true;
+    currentItem = {
+      categories: []
+    };
+    continue;
+  }
+
+  // ----- ITEM END -----
+  if (line.startsWith('</item>')) {
+    insideItem = false;
+    result.items.push(currentItem);
+    currentItem = null;
+    continue;
+  }
+
+  // ----- ITEM CONTENT -----
+  if (insideItem) {
+    if (line.startsWith('<title>')) {
+      currentItem.title = extractCDATA(line.replace(/<\/?title>/g, ''));
+    }
+
+    if (line.startsWith('<link>')) {
+      currentItem.link = extractCDATA(line.replace(/<\/?link>/g, ''));
+    }
+
+    if (line.startsWith('<guid>')) {
+      currentItem.guid = extractCDATA(line.replace(/<\/?guid>/g, ''));
+    }
+
+    if (line.startsWith('<pubDate>')) {
+      currentItem.pubDate = extractCDATA(line.replace(/<\/?pubDate>/g, ''));
+    }
+
+    if (line.startsWith('<category>')) {
+      currentItem.categories.push(
+        extractCDATA(line.replace(/<\/?category>/g, ''))
+      );
+    }
+
+    if (line.startsWith('<description>')) {
+      currentItem.description = extractCDATA(
+        line.replace(/<\/?description>/g, '')
+      );
+    }
+
+    // enclosure image
+    if (line.includes('<enclosure')) {
+      const urlMatch = line.match(/url="([^"]+)"/);
+      if (urlMatch) {
+        currentItem.image = urlMatch[1];
+      }
+    }
+  }
 }
 
-// Saglabā JSON failā
-fs.writeFileSync('output.json', JSON.stringify(simplified, null, 2), 'utf8');
+// Saglabā JSON
+fs.writeFileSync(
+  'output.json',
+  JSON.stringify(result, null, 2),
+  'utf8'
+);
+
 console.log('XML veiksmīgi pārveidots par JSON!');
-console.log(`Kopējais ierakstu skaits: ${simplified.items.length}`);
+console.log(`Kopējais ierakstu skaits: ${result.items.length}`);
