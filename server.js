@@ -112,33 +112,40 @@ function parseXML(xmlData) {
 // API endpoint /delfi
 app.get('/delfi', async (req, res) => {
   try {
-    console.log('📡 Saņemts pieprasījums uz /delfi');
-    
     const response = await fetch('https://www.delfi.lv/rss/index.xml');
-    
-    if (!response.ok) {
-      throw new Error(`HTTP kļūda: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     
     const xmlData = await response.text();
     const result = parseXML(xmlData);
     
-    console.log(`✅ Atgriezti ${result.items.length} ieraksti`);
-    
-    // Atgriež JSON
     res.json({
       success: true,
       source: 'Delfi.lv',
       timestamp: new Date().toISOString(),
       ...result
     });
-    
   } catch (error) {
-    console.error('❌ Kļūda:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API endpoint /apollo
+app.get('/apollo', async (req, res) => {
+  try {
+    const response = await fetch('https://www.apollo.lv/rss/zinas/');
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    
+    const xmlData = await response.text();
+    const result = parseXML(xmlData);
+    
+    res.json({
+      success: true,
+      source: 'Apollo.lv',
+      timestamp: new Date().toISOString(),
+      ...result
     });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -147,17 +154,13 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Latvijas Ziņu API',
     endpoints: [
-      {
-        path: '/delfi',
-        description: 'Delfi.lv jaunākās ziņas',
-        method: 'GET'
-      }
+      { path: '/delfi', description: 'Delfi.lv ziņas' },
+      { path: '/apollo', description: 'Apollo.lv ziņas' }
     ]
   });
 });
 
 // Servera palaišana
 app.listen(PORT, () => {
-  console.log(` Serveris darbojas uz http://localhost:${PORT}`);
-  console.log(` Delfi RSS pieejams uz http://localhost:${PORT}/delfi`);
-}); 
+  console.log(`Server: http://localhost:${PORT}`);
+});
