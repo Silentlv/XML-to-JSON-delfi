@@ -1,25 +1,51 @@
 const express = require('express');
+const sqlite3 = require('sqlite3').verbose();
 const app = express();
 const PORT = 3000;
 
-// Funkcija CDATA ekstrakcēšanai
+// Datubāzes inicializācija
+const db = new sqlite3.Database('./news.db', (err) => {
+  if (err) console.error(err.message);
+  else console.log('Database connected');
+});
+
+// Izveido tabulu
+db.run(`CREATE TABLE IF NOT EXISTS news (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  title TEXT,
+  link TEXT UNIQUE,
+  guid TEXT,
+  pubDate TEXT,
+  description TEXT,
+  image TEXT,
+  categories TEXT,
+  fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS fetch_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+// RSS avotu konfigurācija
+const RSS_SOURCES = {
+  delfi: 'https://www.delfi.lv/rss/index.xml',
+  apollo: 'https://www.apollo.lv/rss/zinas/',
+  tvnet: 'https://www.tvnet.lv/rss/zinas'
+};
+
+const CACHE_DURATION = 10 * 60 * 1000; // 10 minūtes
+
 function extractCDATA(text) {
   if (!text) return '';
-  return text
-    .replace('<![CDATA[', '')
-    .replace(']]>', '')
-    .trim();
+  return text.replace('<![CDATA[', '').replace(']]>', '').trim();
 }
 
-// Funkcija XML parsēšanai
 function parseXML(xmlData) {
   const lines = xmlData.split('\n');
-  
-  const result = {
-    channel: {},
-    items: []
-  };
-  
+  const result = { channel: {}, items: [] };
   let currentItem = null;
   let insideChannel = false;
   let insideItem = false;
@@ -27,7 +53,6 @@ function parseXML(xmlData) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     
-    // ----- CHANNEL -----
     if (line.startsWith('<channel>')) {
       insideChannel = true;
       continue;
@@ -47,24 +72,14 @@ function parseXML(xmlData) {
       if (line.startsWith('<description>')) {
         result.channel.description = extractCDATA(line.replace(/<\/?description>/g, ''));
       }
-      if (line.startsWith('<language>')) {
-        result.channel.language = extractCDATA(line.replace(/<\/?language>/g, ''));
-      }
-      if (line.startsWith('<lastBuildDate>')) {
-        result.channel.lastBuildDate = extractCDATA(line.replace(/<\/?lastBuildDate>/g, ''));
-      }
     }
     
-    // ----- ITEM START -----
     if (line.startsWith('<item>')) {
       insideItem = true;
-      currentItem = {
-        categories: []
-      };
+      currentItem = { categories: [] };
       continue;
     }
     
-    // ----- ITEM END -----
     if (line.startsWith('</item>')) {
       insideItem = false;
       result.items.push(currentItem);
@@ -72,7 +87,6 @@ function parseXML(xmlData) {
       continue;
     }
     
-    // ----- ITEM CONTENT -----
     if (insideItem) {
       if (line.startsWith('<title>')) {
         currentItem.title = extractCDATA(line.replace(/<\/?title>/g, ''));
@@ -92,16 +106,11 @@ function parseXML(xmlData) {
         );
       }
       if (line.startsWith('<description>')) {
-        currentItem.description = extractCDATA(
-          line.replace(/<\/?description>/g, '')
-        );
+        currentItem.description = extractCDATA(line.replace(/<\/?description>/g, ''));
       }
-      // enclosure image
       if (line.includes('<enclosure')) {
         const urlMatch = line.match(/url="([^"]+)"/);
-        if (urlMatch) {
-          currentItem.image = urlMatch[1];
-        }
+        if (urlMatch) currentItem.image = urlMatch[1];
       }
     }
   }
@@ -109,58 +118,132 @@ function parseXML(xmlData) {
   return result;
 }
 
-// API endpoint /delfi
-app.get('/delfi', async (req, res) => {
-  try {
-    const response = await fetch('https://www.delfi.lv/rss/index.xml');
-    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-    
-    const xmlData = await response.text();
-    const result = parseXML(xmlData);
-    
-    res.json({
-      success: true,
-      source: 'Delfi.lv',
-      timestamp: new Date().toISOString(),
-      ...result
+// Pārbauda vai vajag atjaunot datus
+function needsRefresh(source) {
+  return new Promise((resolve) => {
+    db.get(
+     `SELECT fetched_at FROM fetch_log WHERE source = ? ORDER BY fetched_at DESC LIMIT 1`,
+      [source],
+      (err, row) => {
+        if (err || !row) {
+         resolve(true);
+          return;
+        }
+        const lastFetch = new Date(row.fetched_at).getTime();
+       const now = Date.now();
+        resolve(now - lastFetch > CACHE_DURATION);
+      }
+    );
+  });
+}
+
+// Saglabā ziņas datubāzē
+async function saveNews(source, items) {
+  const stmt = db.prepare(`INSERT OR IGNORE INTO news 
+    (source, title, link, guid, pubDate, description, image, categories) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  
+  for (const item of items) {
+    stmt.run(
+      source,
+      item.title,
+      item.link,
+      item.guid,
+      item.pubDate,
+      item.description,
+      item.image,
+      JSON.stringify(item.categories)
+    );
+  }
+  stmt.finalize();
+  
+  db.run(`INSERT INTO fetch_log (source) VALUES (?)`, [source]);
+}
+
+// Iegūst ziņas no datubāzes
+function getNewsFromDB(source) {
+  return new Promise((resolve, reject) => {
+    db.all(
+     `SELECT * FROM news WHERE source = ? ORDER BY fetched_at DESC LIMIT 50`,
+      [source],
+      (err, rows) => {
+      if (err) reject(err);
+        else {
+         const items = rows.map(row => ({
+            title: row.title,
+            link: row.link,
+            guid: row.guid,
+        pubDate: row.pubDate,
+            description: row.description,
+          image: row.image,
+            categories: JSON.parse(row.categories || '[]')
+          }));
+          resolve(items);
+        }
+      }
+    );
+  });
+}
+
+// Dinamiskais endpoint
+app.get('/news/:source', async (req, res) => {
+  const source = req.params.source.toLowerCase();
+  const rssUrl = RSS_SOURCES[source];
+  
+  if (!rssUrl) {
+    return res.status(404).json({
+      success: false,
+      error: 'Source not found',
+      available: Object.keys(RSS_SOURCES)
     });
+  }
+  
+  try {
+    const refresh = await needsRefresh(source);
+    
+   if (refresh) {
+      console.log(`Fetching fresh data for ${source}`);
+      const response = await fetch(rssUrl);
+     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+      
+      const xmlData = await response.text();
+      const result = parseXML(xmlData);
+      
+      await saveNews(source, result.items);
+      
+    res.json({
+        success: true,
+        source: source,
+        cached: false,
+        timestamp: new Date().toISOString(),
+        items: result.items
+      });
+    } else {
+      console.log(`Using cached data for ${source}`);
+      const items = await getNewsFromDB(source);
+      
+      res.json({
+        success: true,
+        source: source,
+        cached: true,
+        timestamp: new Date().toISOString(),
+        items: items
+      });
+    }
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint /apollo
-app.get('/apollo', async (req, res) => {
-  try {
-    const response = await fetch('https://www.apollo.lv/rss/zinas/');
-    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-    
-    const xmlData = await response.text();
-    const result = parseXML(xmlData);
-    
-    res.json({
-      success: true,
-      source: 'Apollo.lv',
-      timestamp: new Date().toISOString(),
-      ...result
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Saknes endpoint
 app.get('/', (req, res) => {
   res.json({
     message: 'Latvijas Ziņu API',
-    endpoints: [
-      { path: '/delfi', description: 'Delfi.lv ziņas' },
-      { path: '/apollo', description: 'Apollo.lv ziņas' }
-    ]
-  });
+    usage: '/news/:source',
+    sources: Object.keys(RSS_SOURCES),
+    cache: '10 minutes'
+ });
 });
 
-// Servera palaišana
 app.listen(PORT, () => {
-  console.log(`Server: http://localhost:${PORT}`);
+ console.log(`Server: http://localhost:${PORT}`);
 });
