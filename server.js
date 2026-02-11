@@ -1,7 +1,11 @@
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 const app = express();
 const PORT = 3000;
+
+// Piegādā statiskos failus
+app.use(express.static(__dirname));
 
 // Datubāzes inicializācija
 const db = new sqlite3.Database('./news.db', (err) => {
@@ -33,7 +37,8 @@ db.run(`CREATE TABLE IF NOT EXISTS fetch_log (
 const RSS_SOURCES = {
   delfi: 'https://www.delfi.lv/rss/index.xml',
   apollo: 'https://www.apollo.lv/rss/zinas/',
-  tvnet: 'https://www.tvnet.lv/rss/zinas'
+  tvnet: 'https://www.tvnet.lv/rss',
+  jauns: 'https://www.jauns.lv/rss'
 };
 
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minūtes
@@ -235,15 +240,13 @@ app.get('/news/:source', async (req, res) => {
   }
 });
 
+// Galvenā lapa - piegādā HTML failu
 app.get('/', (req, res) => {
-  res.json({
-    message: 'Latvijas Ziņu API',
-    usage: '/news/:source',
-    sources: Object.keys(RSS_SOURCES),
-    cache: '10 minutes'
- });
+  res.sendFile(path.join(__dirname, 'news_frontend.html'));
 });
 
 app.listen(PORT, () => {
- console.log(`Server: http://localhost:${PORT}`);
+ console.log(`\n Serveris darbojas!`);
+ console.log(` Atver pārlūkprogrammā: http://localhost:${PORT}`);
+ console.log(` API pieejams: http://localhost:${PORT}/news/:source\n`);
 });
