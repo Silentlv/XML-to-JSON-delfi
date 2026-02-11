@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Latvijas Ziņas</title>
+  <link rel="stylesheet" href="Ziņu portāli.css">
+</head>
+<body>
+  <div class="header">
+    <div class="container">
+      <h1> Latvijas Ziņas</h1>
+      <div class="controls">
+        <div class="tabs">
+          <button class="tab active" data-source="delfi">Delfi</button>
+          <button class="tab" data-source="apollo">Apollo</button>
+          <button class="tab" data-source="tvnet">TVNet</button>
+          <button class="tab" data-source="jauns">Jauns.lv</button>
+        </div>
+        <div class="search">
+          <input type="text" id="searchInput" placeholder="Meklēt ziņas...">
+        </div>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="newsContainer"></div>
+  </div>
+
+  <script src="Frontend zinas.js"></script>
+</body>
+</html>
